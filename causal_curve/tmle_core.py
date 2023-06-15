@@ -8,6 +8,7 @@ from pygam import LinearGAM, s
 from scipy.interpolate import interp1d
 from sklearn.neighbors import KernelDensity
 from xgboost import XGBRegressor
+from sklearn.ensemble import GradientBoostingRegressor
 from statsmodels.nonparametric.kernel_regression import KernelReg
 
 from causal_curve.core import Core
@@ -155,12 +156,10 @@ class TMLE_Core(Core):
         self.bandwidth = bandwidth
         self.random_seed = random_seed
         self.verbose = verbose
-        if "n_estimators" in xgb_params:
-            xgb_params.pop("n_estimators")
-        if "learning_rate" in xgb_params:
-            xgb_params.pop("learning_rate")
-        if "max_depth" in xgb_params:
-            xgb_params.pop("max_depth")
+        
+        xgb_params['n_estimators'] = n_estimators
+        xgb_params['learning_rate'] = learning_rate
+        xgb_params['max_depth'] = max_depth
         xgb_params["random_state"] = self.random_seed
         self.xgb_params = xgb_params
         if "terms" not in final_gam_params:
@@ -312,7 +311,6 @@ class TMLE_Core(Core):
             raise TypeError(
                 f"verbose parameter must be a boolean type, but found type {type(self.verbose)}"
             )
-
     def _validate_fit_data(self):
         """Verifies that T, X, and y are formatted the right way"""
         # Checks for T column
@@ -521,7 +519,8 @@ class TMLE_Core(Core):
             **self.xgb_params
         ).fit(X=X, y=((t - g_model_preds[0 : self.num_rows]) ** 2))
         g_model_2_preds = g_model2.predict(self.fully_expanded_x)
-
+        #all g_model_2_preds should be greater than 0
+        assert np.all(g_model_2_preds > 0), "Negative preds in residual prediciotn G-Model. Try increasing complexity in xgb_params"
         return g_model_preds, g_model_2_preds
 
     def _q_model(self):
@@ -532,12 +531,12 @@ class TMLE_Core(Core):
         X = pd.concat([self.t_data, self.x_data], axis=1)
         X = X[self.fully_expanded_t_and_x.columns]
         y = self.y_data.to_numpy()
-
+        
+        model_args = self.xgb_params.copy()
         if self.monotonic_q_model:
             monotone_constraints = {self.treatment_col_name: 1}
             for col in self.covariate_col_names:
                 monotone_constraints[col]=0
-            model_args = self.xgb_params.copy()
             model_args['monotone_constraints'] = monotone_constraints
         q_model = XGBRegressor(
             **model_args
