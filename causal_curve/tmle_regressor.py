@@ -32,17 +32,27 @@ class TMLE_Regressor(TMLE_Core):
         bandwidth=0.5,
         random_seed=None,
         verbose=False,
+        monotonic_q_model=False,
+        xgb_params={},
+        final_gam_params={},
+        kernel_density_params={}
     ):
 
-        self.treatment_grid_num = treatment_grid_num
-        self.lower_grid_constraint = lower_grid_constraint
-        self.upper_grid_constraint = upper_grid_constraint
-        self.n_estimators = n_estimators
-        self.learning_rate = learning_rate
-        self.max_depth = max_depth
-        self.bandwidth = bandwidth
-        self.random_seed = random_seed
-        self.verbose = verbose
+        super().__init__(
+            treatment_grid_num=treatment_grid_num,
+            lower_grid_constraint=lower_grid_constraint,
+            upper_grid_constraint=upper_grid_constraint,
+            n_estimators=n_estimators,
+            learning_rate=learning_rate,
+            max_depth=max_depth,
+            bandwidth=bandwidth,
+            random_seed=random_seed,
+            verbose=verbose,
+            monotonic_q_model=monotonic_q_model,
+            xgb_params=xgb_params,
+            final_gam_params=final_gam_params,
+            kernel_density_params=kernel_density_params
+        )
 
         # Validate the params
         self._validate_init_params()
