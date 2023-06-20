@@ -520,7 +520,7 @@ class TMLE_Core(Core):
         ).fit(X=X, y=((t - g_model_preds[0 : self.num_rows]) ** 2))
         g_model_2_preds = g_model2.predict(self.fully_expanded_x)
         #all g_model_2_preds should be greater than 0
-        assert np.all(g_model_2_preds > 0), "Negative preds in residual prediciotn G-Model. Try increasing complexity in xgb_params"
+        assert np.all(g_model_2_preds > 0), "Negative preds in residual prediciotn G-Model. Try increasing or decreasing complexity in xgb_params"
         return g_model_preds, g_model_2_preds
 
     def _q_model(self):
