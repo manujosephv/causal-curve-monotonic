@@ -7,6 +7,7 @@ from pandas.api.types import is_float_dtype, is_numeric_dtype
 from pygam import LinearGAM, s
 from scipy.interpolate import interp1d
 from sklearn.neighbors import KernelDensity
+from xgboost import XGBRegressor
 from sklearn.ensemble import GradientBoostingRegressor
 from statsmodels.nonparametric.kernel_regression import KernelReg
 
@@ -140,6 +141,10 @@ class TMLE_Core(Core):
         bandwidth=0.5,
         random_seed=None,
         verbose=False,
+        monotonic_q_model=False,
+        xgb_params={},
+        final_gam_params={},
+        kernel_density_params={}
     ):
 
         self.treatment_grid_num = treatment_grid_num
@@ -151,6 +156,27 @@ class TMLE_Core(Core):
         self.bandwidth = bandwidth
         self.random_seed = random_seed
         self.verbose = verbose
+        
+        xgb_params['n_estimators'] = n_estimators
+        xgb_params['learning_rate'] = learning_rate
+        xgb_params['max_depth'] = max_depth
+        xgb_params["random_state"] = self.random_seed
+        self.xgb_params = xgb_params
+        if "terms" not in final_gam_params:
+            final_gam_params["terms"] = s(0, n_splines=50, spline_order=2)
+        if "max_iter" not in final_gam_params:
+            final_gam_params["max_iter"] = 500
+        if "lam" not in final_gam_params:
+            final_gam_params["lam"] = self.bandwidth
+        self.final_gam_params = final_gam_params
+        if "kernel" not in kernel_density_params:
+            kernel_density_params["kernel"] = "gaussian"
+        if "bandwidth" not in kernel_density_params:
+            kernel_density_params["bandwidth"] = "scott"
+        if "rtol" not in kernel_density_params:
+            kernel_density_params["rtol"] = 1e-2
+        self.kernel_density_params = kernel_density_params
+        self.monotonic_q_model = monotonic_q_model
 
     def _validate_init_params(self):
         """
@@ -285,7 +311,6 @@ class TMLE_Core(Core):
             raise TypeError(
                 f"verbose parameter must be a boolean type, but found type {type(self.verbose)}"
             )
-
     def _validate_fit_data(self):
         """Verifies that T, X, and y are formatted the right way"""
         # Checks for T column
@@ -485,22 +510,17 @@ class TMLE_Core(Core):
         t = self.t_data.to_numpy()
         X = self.x_data.to_numpy()
 
-        g_model = GradientBoostingRegressor(
-            n_estimators=self.n_estimators,
-            max_depth=self.max_depth,
-            learning_rate=self.learning_rate,
-            random_state=self.random_seed,
+        g_model = XGBRegressor(
+            **self.xgb_params
         ).fit(X=X, y=t)
         g_model_preds = g_model.predict(self.fully_expanded_x)
 
-        g_model2 = GradientBoostingRegressor(
-            n_estimators=self.n_estimators,
-            max_depth=self.max_depth,
-            learning_rate=self.learning_rate,
-            random_state=self.random_seed,
+        g_model2 = XGBRegressor(
+            **self.xgb_params
         ).fit(X=X, y=((t - g_model_preds[0 : self.num_rows]) ** 2))
         g_model_2_preds = g_model2.predict(self.fully_expanded_x)
-
+        #all g_model_2_preds should be greater than 0
+        assert np.all(g_model_2_preds > 0), "Negative preds in residual prediciotn G-Model. Try increasing complexity in xgb_params"
         return g_model_preds, g_model_2_preds
 
     def _q_model(self):
@@ -508,14 +528,18 @@ class TMLE_Core(Core):
         values, when the treatment is completely present and not present.
         """
 
-        X = pd.concat([self.t_data, self.x_data], axis=1).to_numpy()
+        X = pd.concat([self.t_data, self.x_data], axis=1)
+        X = X[self.fully_expanded_t_and_x.columns]
         y = self.y_data.to_numpy()
-
-        q_model = GradientBoostingRegressor(
-            n_estimators=self.n_estimators,
-            max_depth=self.max_depth,
-            learning_rate=self.learning_rate,
-            random_state=self.random_seed,
+        
+        model_args = self.xgb_params.copy()
+        if self.monotonic_q_model:
+            monotone_constraints = {self.treatment_col_name: 1}
+            for col in self.covariate_col_names:
+                monotone_constraints[col]=0
+            model_args['monotone_constraints'] = monotone_constraints
+        q_model = XGBRegressor(
+            **model_args
         ).fit(X=X, y=y)
         q_model_preds = q_model.predict(self.fully_expanded_t_and_x)
 
@@ -581,7 +605,7 @@ class TMLE_Core(Core):
         """We now regress the original treatment values against the pseudo-outcome values"""
 
         return LinearGAM(
-            s(0, n_splines=30, spline_order=3), max_iter=500, lam=self.bandwidth
+            **self.final_gam_params
         ).fit(self.t_data, y=self.pseudo_out)
 
     def one_dim_estimate_density(self, series):
@@ -591,12 +615,11 @@ class TMLE_Core(Core):
         series_grid = np.linspace(
             start=series.min(), stop=series.max(), num=self.num_rows
         )
-
-        kde = KernelDensity(kernel="gaussian", bandwidth=self.bandwidth).fit(
+        kde = KernelDensity(**self.kernel_density_params).fit(
             series.reshape(-1, 1)
         )
-
-        return series_grid, np.exp(kde.score_samples(series_grid.reshape(-1, 1)))
+        kde_result = kde.score_samples(series_grid.reshape(-1, 1))
+        return series_grid, np.exp(kde_result)
 
     def pred_from_loess(self, train_x, train_y, x_to_pred):
         """
