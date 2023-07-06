@@ -3,13 +3,14 @@ Defines the Targetted Maximum likelihood Estimation (TMLE) model class
 """
 import numpy as np
 import pandas as pd
+from KDEpy import FFTKDE
 from pandas.api.types import is_float_dtype, is_numeric_dtype
 from pygam import LinearGAM, s
 from scipy.interpolate import interp1d
-from sklearn.neighbors import KernelDensity
-from xgboost import XGBRegressor
 from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.neighbors import KernelDensity
 from statsmodels.nonparametric.kernel_regression import KernelReg
+from xgboost import XGBRegressor
 
 from causal_curve.core import Core
 
@@ -172,9 +173,7 @@ class TMLE_Core(Core):
         if "kernel" not in kernel_density_params:
             kernel_density_params["kernel"] = "gaussian"
         if "bandwidth" not in kernel_density_params:
-            kernel_density_params["bandwidth"] = "scott"
-        if "rtol" not in kernel_density_params:
-            kernel_density_params["rtol"] = 1e-2
+            kernel_density_params["bandwidth"] = "silverman"
         self.kernel_density_params = kernel_density_params
         self.monotonic_q_model = monotonic_q_model
 
@@ -520,7 +519,7 @@ class TMLE_Core(Core):
         ).fit(X=X, y=((t - g_model_preds[0 : self.num_rows]) ** 2))
         g_model_2_preds = g_model2.predict(self.fully_expanded_x)
         #all g_model_2_preds should be greater than 0
-        assert np.all(g_model_2_preds > 0), "Negative preds in residual prediciotn G-Model. Try increasing complexity in xgb_params"
+        assert np.all(g_model_2_preds > 0), "Negative preds in residual prediciotn G-Model. Try increasing or decreasing complexity in xgb_params"
         return g_model_preds, g_model_2_preds
 
     def _q_model(self):
@@ -612,14 +611,16 @@ class TMLE_Core(Core):
         """
         Takes in a numpy array, returns grid values for KDE and predicted probabilities
         """
+        # adding a small tolerance tp max and min value to be larger than training data
+        # needed for FFTKDE
         series_grid = np.linspace(
-            start=series.min(), stop=series.max(), num=self.num_rows
+            start=series.min()-1e-8, stop=series.max()+1e-8, num=self.num_rows
         )
-        kde = KernelDensity(**self.kernel_density_params).fit(
-            series.reshape(-1, 1)
+        kde = FFTKDE(**self.kernel_density_params).fit(
+            series
         )
-        kde_result = kde.score_samples(series_grid.reshape(-1, 1))
-        return series_grid, np.exp(kde_result)
+        kde_result = kde.evaluate(series_grid)
+        return series_grid, kde_result
 
     def pred_from_loess(self, train_x, train_y, x_to_pred):
         """
