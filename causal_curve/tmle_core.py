@@ -173,7 +173,7 @@ class TMLE_Core(Core):
         if "kernel" not in kernel_density_params:
             kernel_density_params["kernel"] = "gaussian"
         if "bandwidth" not in kernel_density_params:
-            kernel_density_params["bandwidth"] = "silverman"
+            kernel_density_params["bw"] = "silverman"
         self.kernel_density_params = kernel_density_params
         self.monotonic_q_model = monotonic_q_model
 
