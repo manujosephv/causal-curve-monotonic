@@ -18,3 +18,4 @@ six
 sphinx_rtd_theme
 statsmodels
 xgboost
+KDEPy
